@@ -15,6 +15,7 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "speculative-prefill.h"
+#include "token-stats.h"
 #include "src/llama-ext.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
@@ -875,6 +876,9 @@ public:
     }
 
     ~server_context_impl() {
+        if (token_stats) {
+            token_stats->save();
+        }
         if (!sleeping) {
             // destroy() is already called when entering sleeping state
             // we don't call it again here to avoid double free
@@ -919,6 +923,9 @@ private:
 
     common_speculative_ptr spec;
 
+    // --token-stats: lives as long as the server process, also across sleep/wake
+    std::unique_ptr<common_token_stats> token_stats;
+
     bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
@@ -960,6 +967,10 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        if (token_stats) {
+            token_stats->save();
+        }
+
         spec.reset();
 
         smpl_spf.reset();
@@ -1198,6 +1209,10 @@ private:
         }
 
         vocab = llama_model_get_vocab(model_tgt);
+
+        if (params_base.token_stats && !token_stats) {
+            token_stats = std::make_unique<common_token_stats>(llama_vocab_n_tokens(vocab), params_base.token_stats_dir);
+        }
 
         n_ctx = llama_n_ctx(ctx_tgt);
 
@@ -1488,6 +1503,10 @@ private:
             SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
 
             slot.callback_on_release = [this](int id_slot) {
+                if (token_stats) {
+                    // an inference is finished: save if the interval has elapsed
+                    token_stats->maybe_save();
+                }
                 queue_tasks.pop_deferred_task(id_slot);
             };
 
@@ -2046,6 +2065,11 @@ private:
     }
 
     bool process_token(completion_token_output & result, server_slot & slot) {
+        if (token_stats) {
+            // the token is final: it came out of sampling or draft verification
+            token_stats->add_generated(result.tok);
+        }
+
         // remember which tokens were sampled - used for repetition penalties during sampling
         const std::string token_str = result.text_to_send;
         slot.sampled = result.tok;
@@ -4176,6 +4200,11 @@ private:
 
                 // prompt evaluated for next-token prediction
                 slot.state = SLOT_STATE_GENERATING;
+
+                if (token_stats) {
+                    const llama_tokens prompt_tokens = slot.prompt.tokens.get_text_tokens();
+                    token_stats->add_prompt(prompt_tokens.data(), prompt_tokens.size());
+                }
 
                 if (slot.can_speculate()) {
                     common_speculative_begin(spec.get(), slot.id, slot.prompt.tokens.get_text_tokens());

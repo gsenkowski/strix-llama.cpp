@@ -365,7 +365,8 @@ struct common_params_speculative_draft {
     // size each draft from measured acceptance instead of always drafting n_max
     bool adaptive = false;
 
-    // MTP only: draft over token ids < N plus control tokens (0 = full vocabulary)
+    // MTP only: draft over token ids < N plus control tokens (0 = reduced draft head from the GGUF if present, else full
+    // vocabulary; < 0 = full vocabulary)
     int32_t mtp_vocab = 0;
 
     common_cpu_params cpuparams;
@@ -620,6 +621,10 @@ struct common_params {
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool verbose_prompt    = false; // print prompt tokens before generation
+
+    // count how often each token occurs in the prompts and in the verified output and save the counts as CSV
+    bool        token_stats     = false;
+    std::string token_stats_dir = "."; // output folder, one file per session
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run

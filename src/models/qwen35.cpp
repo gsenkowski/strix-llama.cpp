@@ -113,6 +113,7 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
         layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", il), { n_embd, n_vocab },     mtp_flags|TENSOR_NOT_REQUIRED);
         layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", il), { n_embd, n_vocab },     mtp_flags|TENSOR_NOT_REQUIRED);
         layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", il), { n_embd },              mtp_flags|TENSOR_NOT_REQUIRED);
+        layer.nextn.draft_head       = create_tensor(tn(LLM_TENSOR_NEXTN_DRAFT_HEAD,       "weight", il), { n_embd, (int64_t) mtp_draft_ids.size() }, mtp_flags|TENSOR_NOT_REQUIRED);
     };
 
     for (int i = 0; i < n_layer; ++i) {

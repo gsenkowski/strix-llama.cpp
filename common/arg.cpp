@@ -1502,6 +1502,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--token-stats"},
+        "record how often each token occurs in the prompts (prefill) and in the verified output (decode) and save the counts "
+        "as CSV (token_id,prompt_count,generated_count) to --token-stats-dir, one file per session, rewritten at most every "
+        "10 minutes (after an inference) and at exit",
+        [](common_params & params) {
+            params.token_stats = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOKEN_STATS"));
+    add_opt(common_arg(
+        {"--token-stats-dir"}, "DIR",
+        string_format("output folder for --token-stats (default: %s)", params.token_stats_dir.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.token_stats_dir = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOKEN_STATS_DIR"));
+    add_opt(common_arg(
         {"--verbose-prompt"},
         string_format("print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false"),
         [](common_params & params) {
@@ -4284,9 +4300,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--spec-draft-mtp-vocab"}, "N",
         string_format("MTP: compute draft logits over token ids < N plus control tokens only; verification is unchanged "
-                      "(0 = full vocabulary, default: %d)", params.speculative.draft.mtp_vocab),
+                      "(0 = the reduced draft head stored in the MTP GGUF if it has one, else the full vocabulary; "
+                      "-1 = always the full vocabulary, default: %d)", params.speculative.draft.mtp_vocab),
         [](common_params & params, int value) {
-            params.speculative.draft.mtp_vocab = std::max(0, value);
+            params.speculative.draft.mtp_vocab = std::max(-1, value);
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(

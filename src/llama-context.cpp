@@ -484,8 +484,10 @@ llama_context::llama_context(
         }
 
         // the draft vocabulary subset belongs to this context; contexts that ask for the same N share one copy
-        if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && params.mtp_draft_vocab > 0) {
-            mtp_draft = model.mtp_draft_vocab_get(params.mtp_draft_vocab);
+        // mtp_draft_vocab: N > 0 = token ids < N, 0 = the reduced head stored in the GGUF if there is one, < 0 = full vocabulary
+        if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && params.mtp_draft_vocab >= 0) {
+            mtp_draft = params.mtp_draft_vocab > 0 ? model.mtp_draft_vocab_get(params.mtp_draft_vocab)
+                                                   : model.mtp_draft_vocab_get_embedded();
             if (mtp_draft) {
                 cparams.mtp_draft_vocab = mtp_draft->n_keep;
             }

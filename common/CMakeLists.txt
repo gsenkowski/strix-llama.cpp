@@ -111,6 +111,8 @@ add_library(${TARGET}
     speculative.h
     subproc.cpp
     subproc.h
+    token-stats.cpp
+    token-stats.h
     trie.cpp
     trie.h
     unicode.cpp
