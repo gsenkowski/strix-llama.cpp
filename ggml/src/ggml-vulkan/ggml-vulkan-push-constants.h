@@ -729,6 +729,19 @@ struct vk_op_flash_attn_top_k_push_constants {
 };
 static_assert(sizeof(vk_op_flash_attn_top_k_push_constants) <= 128);
 
+// shared by flash_attn_sel_prep.comp, flash_attn_sel.comp and flash_attn_sel_cm.comp
+struct vk_op_flash_attn_sel_push_constants {
+    uint32_t n_kv, n_sel, list_stride;
+    uint32_t nbq1, nbq2, nbq3;
+    uint32_t nbk1, nbk2, nbk3;
+    uint32_t nbv1, nbv2, nbv3;
+    uint32_t nbi1, nbi3;
+    uint32_t nb1, nb2, nb3;
+    float scale;
+    uint32_t n_split, chunk, n_head, n_tok, n_stream;
+};
+static_assert(sizeof(vk_op_flash_attn_sel_push_constants) <= 128);
+
 struct vk_op_gated_delta_net_push_constants {
     uint32_t H;
     uint32_t n_tokens;
@@ -740,6 +753,12 @@ struct vk_op_gated_delta_net_push_constants {
     uint32_t neq1, rq3;
     float scale;
     uint32_t K;
+};
+
+// gdn_chunk_prep.comp / gdn_chunk_scan.comp: the sequential kernel's constants plus the chunk count
+struct vk_op_gdn_chunk_push_constants {
+    vk_op_gated_delta_net_push_constants gdn;
+    uint32_t nch;
 };
 
 struct vk_op_ssm_scan_push_constants {

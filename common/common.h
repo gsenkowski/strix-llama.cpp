@@ -326,6 +326,7 @@ struct common_params_model {
     std::string hf_repo     = ""; // HF repo
     std::string hf_file     = ""; // HF file
     std::string docker_repo = ""; // Docker repo
+    std::string ple         = ""; // GGUF with per-layer embedding tables used instead of the model's own
 
     std::string get_name() const {
         if (!hf_repo.empty()) {
@@ -365,7 +366,8 @@ struct common_params_speculative_draft {
     // size each draft from measured acceptance instead of always drafting n_max
     bool adaptive = false;
 
-    // MTP only: draft over token ids < N plus control tokens (0 = full vocabulary)
+    // MTP only: draft over token ids < N plus control tokens (0 = reduced draft head from the GGUF if present, else full
+    // vocabulary; < 0 = full vocabulary)
     int32_t mtp_vocab = 0;
 
     common_cpu_params cpuparams;
@@ -437,12 +439,25 @@ struct common_params_speculative {
     bool has_prefill() const {
         return prefill.enabled && !prefill.model.empty();
     }
+
+    // cap on the rollback snapshot slots, -1 = follow draft.n_max (see need_n_rs_seq)
+    int32_t n_rs_seq_max = -1;
+
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
             return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
 
-        return needs_rs_seq ? draft.n_max : 0u;
+        if (!needs_rs_seq) {
+            return 0u;
+        }
+
+        // the recurrent cache holds (1 + n_rs_seq) copies of every sequence's state, which on a
+        // large linear-attention model is GiBs. Capping trades speed for memory: a rollback
+        // deeper than n_rs_seq is still correct, it just falls back to the host checkpoint.
+        const int32_t n = n_rs_seq_max >= 0 ? std::min(n_rs_seq_max, draft.n_max) : draft.n_max;
+
+        return (uint32_t) std::max(0, n);
     }
 };
 
@@ -620,6 +635,10 @@ struct common_params {
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool verbose_prompt    = false; // print prompt tokens before generation
+
+    // count how often each token occurs in the prompts and in the verified output and save the counts as CSV
+    bool        token_stats     = false;
+    std::string token_stats_dir = "."; // output folder, one file per session
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run

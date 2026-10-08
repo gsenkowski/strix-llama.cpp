@@ -232,6 +232,8 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_head_s    = nullptr;
     struct ggml_tensor * shared_head_head_in_s = nullptr;
     struct ggml_tensor * shared_head_norm      = nullptr;
+    // reduced MTP draft head: the LM head rows of the token ids in llama_model::mtp_draft_ids (qwen35, qwen35moe)
+    struct ggml_tensor * draft_head            = nullptr;
     // qwen4exp: the draft head's own final hyper-connection mixer (the target's is not reused)
     struct ggml_tensor * hc_head_norm          = nullptr;
     struct ggml_tensor * hc_head_down          = nullptr;
@@ -654,6 +656,9 @@ struct llama_model {
     // for classifier models
     std::vector<std::string> classifier_labels;
 
+    // token id of each row of the reduced MTP draft head (layers[n_layer].nextn.draft_head), empty if the GGUF has none
+    std::vector<int32_t> mtp_draft_ids;
+
     struct ggml_tensor * tok_embd   = nullptr;
     struct ggml_tensor * type_embd  = nullptr;
     struct ggml_tensor * pos_embd   = nullptr;
@@ -788,6 +793,10 @@ struct llama_model {
     // draft vocabulary subset for mtp_draft_vocab = n_keep, built on first request and freed with the last context
     // holding it; nullptr if the subset cannot be used with this model (thread-safe)
     std::shared_ptr<const llama_mtp_draft_vocab> mtp_draft_vocab_get(int32_t n_keep) const;
+
+    // the reduced draft head stored in the GGUF (nextn.draft_head + nextn_draft_vocab_ids), copied to the output buffer type
+    // on first request and freed with the last context holding it; nullptr if the GGUF has none or it cannot be used
+    std::shared_ptr<const llama_mtp_draft_vocab> mtp_draft_vocab_get_embedded() const;
 
     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;

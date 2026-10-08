@@ -383,13 +383,18 @@ llama_context::llama_context(
             }
         }
 
-        // the CUDA/HIP BF16 WMMA matmul path (mmb) is tuned for qwen4exp: other archs keep MMQ
+        // the CUDA/HIP BF16 WMMA matmul path (mmb): every arch from 512 rows, for the weight types it takes
         for (auto & backend : backends) {
             ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
             ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
             auto * set_mmb_fn = reg ? (void (*)(ggml_backend_t, bool)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_set_mmb_enabled") : nullptr;
             if (set_mmb_fn) {
                 set_mmb_fn(backend.get(), true);
+            }
+            // 32-511-row GEMMs on mmb too: measured on qwen4exp only (see mmb_min_t)
+            auto * set_mmb_small_fn = reg ? (void (*)(ggml_backend_t, bool)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_set_mmb_small_batch") : nullptr;
+            if (set_mmb_small_fn) {
+                set_mmb_small_fn(backend.get(), model.arch == LLM_ARCH_QWEN4EXP);
             }
         }
 
@@ -484,8 +489,10 @@ llama_context::llama_context(
         }
 
         // the draft vocabulary subset belongs to this context; contexts that ask for the same N share one copy
-        if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && params.mtp_draft_vocab > 0) {
-            mtp_draft = model.mtp_draft_vocab_get(params.mtp_draft_vocab);
+        // mtp_draft_vocab: N > 0 = token ids < N, 0 = the reduced head stored in the GGUF if there is one, < 0 = full vocabulary
+        if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && params.mtp_draft_vocab >= 0) {
+            mtp_draft = params.mtp_draft_vocab > 0 ? model.mtp_draft_vocab_get(params.mtp_draft_vocab)
+                                                   : model.mtp_draft_vocab_get_embedded();
             if (mtp_draft) {
                 cparams.mtp_draft_vocab = mtp_draft->n_keep;
             }

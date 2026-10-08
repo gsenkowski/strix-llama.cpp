@@ -1329,6 +1329,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
     GGML_ASSERT(hparams.n_layer_all > 0 && hparams.n_layer_all <= LLAMA_MAX_LAYERS);
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,    hparams.n_layer_nextn,   false);
+    ml.get_arr(LLM_KV_NEXTN_DRAFT_VOCAB_IDS,   mtp_draft_ids,           false);
     GGML_ASSERT(hparams.n_layer_nextn <= hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
     std::fill(hparams.n_expert_used_arr.begin(), hparams.n_expert_used_arr.end(), 0);
@@ -2448,6 +2449,85 @@ std::shared_ptr<const llama_mtp_draft_vocab> llama_model::mtp_draft_vocab_get(in
     return res;
 }
 
+std::shared_ptr<const llama_mtp_draft_vocab> llama_model::mtp_draft_vocab_get_embedded() const {
+    if (mtp_draft_ids.empty()) {
+        return nullptr;
+    }
+    const ggml_tensor * out = output;
+    // probe contexts (common_fit_params) use a model with unallocated weights: no subset
+    if (out == nullptr || out->buffer == nullptr || out->data == nullptr) {
+        return nullptr;
+    }
+    // same restriction as the prefix subset: the MTP block must score with the model LM head
+    if ((arch != LLM_ARCH_QWEN35 && arch != LLM_ARCH_QWEN35MOE) || hparams.n_layer_nextn == 0 ||
+            layers[hparams.n_layer()].nextn.shared_head_head != nullptr) {
+        return nullptr;
+    }
+    const ggml_tensor * src = layers[hparams.n_layer()].nextn.draft_head;
+    if (src == nullptr || src->buffer == nullptr) {
+        LLAMA_LOG_WARN("%s: the GGUF has %zu draft vocabulary ids but no nextn.draft_head tensor, drafting over the full vocabulary\n",
+                       __func__, mtp_draft_ids.size());
+        return nullptr;
+    }
+    const int64_t n_sel   = (int64_t) mtp_draft_ids.size();
+    const int64_t n_vocab = (int64_t) vocab.n_tokens();
+    if (src->ne[0] != out->ne[0] || src->ne[1] != n_sel || n_sel >= n_vocab) {
+        LLAMA_LOG_ERROR("%s: unusable reduced draft head [%lld, %lld] for LM head [%lld, %lld], drafting over the full vocabulary\n", __func__,
+                        (long long) src->ne[0], (long long) src->ne[1], (long long) out->ne[0], (long long) out->ne[1]);
+        return nullptr;
+    }
+    std::vector<int64_t> ids(mtp_draft_ids.begin(), mtp_draft_ids.end());
+    for (const int64_t id : ids) {
+        if (id < 0 || id >= n_vocab) {
+            LLAMA_LOG_ERROR("%s: draft vocabulary id %lld is outside the vocabulary (%lld tokens), drafting over the full vocabulary\n",
+                            __func__, (long long) id, (long long) n_vocab);
+            return nullptr;
+        }
+    }
+
+    const ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(out->buffer);
+
+    std::lock_guard<std::mutex> lock(pimpl->mtp_draft_mutex);
+
+    auto & cache = pimpl->mtp_draft_cache;
+    for (auto it = cache.begin(); it != cache.end(); ) {
+        it = it->second.expired() ? cache.erase(it) : std::next(it);
+    }
+    // n_keep = -1 never collides with a prefix subset (n_keep > 0)
+    const auto key = std::make_pair(-1, buft);
+    if (auto it = cache.find(key); it != cache.end()) {
+        return it->second.lock();
+    }
+
+    std::vector<uint8_t> host(ggml_nbytes(src));
+    ggml_backend_tensor_get(src, host.data(), 0, host.size());
+
+    auto res = std::make_shared<llama_mtp_draft_vocab>();
+    res->n_keep = (int32_t) n_sel;
+
+    ggml_init_params ip = { 2 * ggml_tensor_overhead(), nullptr, true };
+    res->ctx.reset(ggml_init(ip));
+    res->head = ggml_new_tensor_2d(res->ctx.get(), src->type, src->ne[0], n_sel);
+    res->ids  = ggml_new_tensor_1d(res->ctx.get(), GGML_TYPE_I64, n_sel);
+    ggml_set_name(res->head, "mtp_draft_head_embedded");
+    ggml_set_name(res->ids,  "mtp_draft_ids_embedded");
+    res->buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(res->ctx.get(), buft));
+    if (!res->buf) {
+        LLAMA_LOG_ERROR("%s: buffer allocation failed, drafting over the full vocabulary\n", __func__);
+        return nullptr;
+    }
+    ggml_backend_buffer_set_usage(res->buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_backend_tensor_set(res->head, host.data(), 0, host.size());
+    ggml_backend_tensor_set(res->ids, ids.data(), 0, ids.size() * sizeof(int64_t));
+
+    LLAMA_LOG_INFO("%s: MTP draft head from the GGUF uses %lld of %lld rows (%.2f MiB of %s, %s)\n", __func__,
+                   (long long) n_sel, (long long) n_vocab, (double) host.size() / 1048576.0, ggml_type_name(src->type),
+                   ggml_backend_buft_name(buft));
+
+    cache[key] = res;
+    return res;
+}
+
 float llama_model::get_rope_freq_base (const llama_cparams & cparams, int il) const {
     return hparams.is_swa(il) ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
 }
@@ -3036,6 +3116,7 @@ llama_model_params llama_model_default_params() {
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
         /*.load_mtp                    =*/ false,
+        /*.path_ple                    =*/ nullptr,
     };
 
     return result;

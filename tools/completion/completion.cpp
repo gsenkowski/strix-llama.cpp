@@ -3,6 +3,7 @@
 #include "console.h"
 #include "log.h"
 #include "sampling.h"
+#include "token-stats.h"
 #include "llama.h"
 #include "chat.h"
 
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <memory>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -153,6 +155,11 @@ int llama_completion(int argc, char ** argv) {
 
     llama_memory_t mem = llama_get_memory(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    std::unique_ptr<common_token_stats> token_stats;
+    if (params.token_stats) {
+        token_stats = std::make_unique<common_token_stats>(llama_vocab_n_tokens(vocab), params.token_stats_dir);
+    }
 
     // note: the time for chat template initialization is not negligible:
     auto chat_templates = common_chat_templates_init(model, params.chat_template);
@@ -669,6 +676,10 @@ int llama_completion(int argc, char ** argv) {
 
             common_sampler_accept(smpl, id, /* accept_grammar= */ true);
 
+            if (token_stats) {
+                token_stats->add_generated(id);
+            }
+
             // LOG_DBG("last: %s\n", string_from(ctx, smpl->prev.to_vector()).c_str());
 
             embd.push_back(id);
@@ -693,6 +704,10 @@ int llama_completion(int argc, char ** argv) {
                 // push the prompt in the sampling context in order to apply repetition penalties later
                 // for the prompt, we don't apply grammar rules
                 common_sampler_accept(smpl, embd_inp[n_consumed], /* accept_grammar= */ false);
+
+                if (token_stats) {
+                    token_stats->add_prompt(&embd_inp[n_consumed], 1);
+                }
 
                 ++n_consumed;
                 if ((int) embd.size() == params.n_batch) {
@@ -802,6 +817,11 @@ int llama_completion(int argc, char ** argv) {
             }
 
             if ((n_past > 0 || waiting_for_first_input) && is_interacting) {
+                if (token_stats) {
+                    // a generation turn is finished and the program waits for user input: save if the interval has elapsed
+                    token_stats->maybe_save();
+                }
+
                 LOG_DBG("waiting for user input\n");
 
                 if (params.conversation_mode) {
@@ -945,6 +965,10 @@ int llama_completion(int argc, char ** argv) {
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
         LOG_INF("saved final session to %s, n_tokens = %zu\n", path_session.data(), session_tokens.size());
 
+    }
+
+    if (token_stats) {
+        token_stats->save();
     }
 
     LOG("\n\n");

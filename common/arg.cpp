@@ -1502,6 +1502,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--token-stats"},
+        "record how often each token occurs in the prompts (prefill) and in the verified output (decode) and save the counts "
+        "as CSV (token_id,prompt_count,generated_count) to --token-stats-dir, one file per session, rewritten at most every "
+        "10 minutes (after an inference) and at exit",
+        [](common_params & params) {
+            params.token_stats = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOKEN_STATS"));
+    add_opt(common_arg(
+        {"--token-stats-dir"}, "DIR",
+        string_format("output folder for --token-stats (default: %s)", params.token_stats_dir.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.token_stats_dir = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOKEN_STATS_DIR"));
+    add_opt(common_arg(
         {"--verbose-prompt"},
         string_format("print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false"),
         [](common_params & params) {
@@ -2741,6 +2757,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             else { throw std::invalid_argument("invalid value"); }
         }
     ).set_env("LLAMA_ARG_LAZY_MODE"));
+    add_opt(common_arg(
+        {"--ple"}, "FNAME",
+        "GGUF with per-layer embedding (PLE) tables to use instead of the tables in the model file; each tensor in it replaces the lookup table of the same name in the model and must have the same shape (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.model.ple = value;
+        }
+    ).set_env("LLAMA_ARG_PLE"));
     add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
@@ -4284,11 +4307,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--spec-draft-mtp-vocab"}, "N",
         string_format("MTP: compute draft logits over token ids < N plus control tokens only; verification is unchanged "
-                      "(0 = full vocabulary, default: %d)", params.speculative.draft.mtp_vocab),
+                      "(0 = the reduced draft head stored in the MTP GGUF if it has one, else the full vocabulary; "
+                      "-1 = always the full vocabulary, default: %d)", params.speculative.draft.mtp_vocab),
         [](common_params & params, int value) {
-            params.speculative.draft.mtp_vocab = std::max(0, value);
+            params.speculative.draft.mtp_vocab = std::max(-1, value);
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MTP_VOCAB"));
     add_opt(common_arg(
         {"--spec-draft-n-min"}, "N",
         string_format("minimum number of draft tokens to use for speculative decoding (default: %d)", params.speculative.draft.n_min),
@@ -4296,6 +4320,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.n_min = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
+    add_opt(common_arg(
+        {"--spec-n-rs-seq"}, "N",
+        "cap the recurrent-state rollback slots for models that support them (default: -1, follow --spec-draft-n-max).\n"
+        "the recurrent cache holds (1 + N) copies of each sequence's state, so on a large linear-attention\n"
+        "model each slot costs hundreds of MiB. a rollback deeper than N stays correct, it just uses the\n"
+        "slower host checkpoint. 0 disables the fast path entirely",
+        [](common_params & params, int value) {
+            params.speculative.n_rs_seq_max = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_N_RS_SEQ"));
     add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",
